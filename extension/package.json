@@ -1,0 +1,36 @@
+{
+  "name": "mysql-mcp-extension",
+  "displayName": "MySQL MCP Server",
+  "description": "MCP server for MySQL databases in VS Code",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mysql-mcp.configure",
+        "title": "Configure MySQL MCP Server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "echo 'No build required for JS extension'"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/mysql-mcp-extension"
+  },
+  "publisher": "your-publisher-name"
+}
