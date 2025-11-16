@@ -1,13 +1,19 @@
 {
   "name": "mysql-mcp-extension",
-  "displayName": "MySQL MCP Server",
-  "description": "MCP server for MySQL databases in VS Code",
-  "version": "1.0.0",
+  "displayName": "MySQL MCP Extension",
+  "description": "A VS Code extension for interacting with MySQL, PostgreSQL, and SQLite via MCP",
+  "version": "0.0.1",
+  "publisher": "ahmad5599",
   "engines": {
     "vscode": "^1.80.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:mysql-mcp.configure"
+  ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
@@ -18,19 +24,23 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "build": "echo 'No build required for JS extension'"
+    "build": "echo 'No build required for JS extension'",
+    "package": "vsce package --out mysql-mcp-extension.vsix --allow-missing-repository"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "@vscode/vsce": "^2.24.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/your-org/mysql-mcp-extension"
-  },
-  "publisher": "your-publisher-name"
+  "dependencies": {
+    "json5": "^2.2.3",
+    "vscode-jsonrpc": "^8.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0",
+    "pg": "^8.16.3",
+    "pg-format": "^1.0.4",
+    "sqlite3": "^5.1.7",
+    "uuid": "^9.0.1",
+    "yargs": "^17.7.2"
+  }
 }

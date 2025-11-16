@@ -11,7 +11,6 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs').promises;
 const path = require('path');
 const url = require('url');
-const knex = require('knex');
 
 // Load environment variables
 dotenv.config();
@@ -68,15 +67,27 @@ const argv = yargs
 // Logger setup
 const loggers = argv.loggers.split(',').map(l => l.trim());
 const log = async (message, level = 'info') => {
-  const logMessage = `[${new Date().toISOString()}] ${level.toUpperCase()}: ${message}\n`;
-  if (loggers.includes('stderr')) console.error(logMessage);
-  if (loggers.includes('disk')) {
-    await fs.mkdir(argv.logPath, { recursive: true });
-    await fs.appendFile(path.join(argv.logPath, 'mysql-mcp.log'), logMessage);
-  }
-  if (loggers.includes('mcp')) {
-    console.log(`MCP_LOG: ${logMessage}`);
-  }
+  try {
+    const logMessage = `[${new Date().toISOString()}] ${level.toUpperCase()}: ${message}\n`;
+    if (loggers.includes('stderr')) {
+      try { console.error(logMessage); } catch (_) {}
+    }
+    if (loggers.includes('disk')) {
+      try {
+        await fs.mkdir(argv.logPath, { recursive: true });
+        await fs.appendFile(path.join(argv.logPath, 'mysql-mcp.log'), logMessage);
+      } catch (_) {}
+    }
+    if (loggers.includes('mcp')) {
+      try {
+        if (argv.transport === 'stdio') {
+          process.stderr.write(`MCP_LOG: ${logMessage}`);
+        } else {
+          console.log(`MCP_LOG: ${logMessage}`);
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
 };
 
 // MCP Server state
@@ -106,23 +117,19 @@ const sanitizeIdentifier = (name) => {
 
 // Connect to the database
 const connectToDatabase = async (connectionString) => {
-  const { protocol } = parseConnectionString(connectionString);
-  let client;
+  const { protocol, parsed } = parseConnectionString(connectionString);
   if (protocol === 'mysql') {
-    client = 'mysql';
+    return await mysql.createConnection(connectionString);
   } else if (protocol === 'postgres') {
-    client = 'pg';
+    const client = new PgClient({ connectionString });
+    await client.connect();
+    return client;
   } else if (protocol === 'sqlite') {
-    client = 'sqlite3';
+    const dbPath = parsed.pathname;
+    return new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
   } else {
     throw new Error(`Unsupported protocol: ${protocol}`);
   }
-
-  return knex({
-    client,
-    connection: connectionString,
-    useNullAsDefault: client === 'sqlite3',
-  });
 };
 
 // Normalize query results
@@ -135,12 +142,51 @@ const normalizeResults = (rows, dbType) => {
 
 // Execute query (with DB-specific handling)
 const executeQuery = async (query, params, limit, dbType) => {
-  if (dbType === 'mysql' || dbType === 'postgres' || dbType === 'sqlite') {
-    const limitedQuery = `${query} LIMIT ${limit}`;
-    const result = await connection.raw(limitedQuery, params);
-    return dbType === 'mysql' ? result[0] : result;
+  if (dbType === 'mysql') {
+    if (query.toLowerCase().startsWith('show tables') || query.toLowerCase().startsWith('describe')) {
+      const [rows] = await connection.query(query, params);
+      await log(`MySQL query result: ${JSON.stringify(rows)}`, 'debug');
+      return rows.slice(0, limit);
+    } else if (query.toLowerCase().startsWith('insert')) {
+      const [result] = await connection.query(query, params);
+      return result;
+    }
+    const [rows] = await connection.query(`${query} LIMIT ?`, [...params, limit]);
+    await log(`MySQL query result: ${JSON.stringify(rows)}`, 'debug');
+    return rows;
+  } else if (dbType === 'postgres') {
+    const result = await connection.query(query, params);
+    await log(`PostgreSQL query result: ${JSON.stringify(result.rows)}`, 'debug');
+    return result.rows.slice(0, limit);
+  } else if (dbType === 'sqlite') {
+    return new Promise((resolve, reject) => {
+      connection.all(query, params, async (err, rows) => {
+        if (err) {
+          await log(`SQLite query error: ${err.message}`, 'error');
+          reject(err);
+        } else {
+          await log(`SQLite query result: ${JSON.stringify(rows)}`, 'debug');
+          resolve(rows.slice(0, limit));
+        }
+      });
+    });
   }
   throw new Error('Unsupported database type');
+};
+
+// Ensure connection is active
+const ensureConnection = async () => {
+  if (!connection && config.connectionString) {
+    try {
+      const { protocol } = parseConnectionString(config.connectionString);
+      connection = await connectToDatabase(config.connectionString);
+      dbType = protocol;
+      await log(`Reconnected to ${protocol} database`);
+    } catch (error) {
+      await log(`Reconnection failed: ${error.message}`, 'error');
+      throw error;
+    }
+  }
 };
 
 // MCP Tools
@@ -178,6 +224,7 @@ const tools = [
       { name: 'limit', type: 'number', description: 'Max rows to return', default: config.maxRowsPerQuery },
     ],
     async execute({ query, limit = config.maxRowsPerQuery }) {
+      await ensureConnection();
       if (!connection) throw new Error('Not connected to a database');
       if (!query.toLowerCase().startsWith('select')) {
         throw new Error('Only SELECT queries are allowed');
@@ -198,15 +245,22 @@ const tools = [
     operationType: 'metadata',
     parameters: [],
     async execute() {
+      await ensureConnection();
       if (!connection) throw new Error('Not connected to a database');
       try {
         let query;
         if (dbType === 'mysql') query = 'SHOW TABLES';
         else if (dbType === 'postgres') query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'";
         else if (dbType === 'sqlite') query = "SELECT name FROM sqlite_master WHERE type='table'";
-        const rows = await connection.raw(query);
-        const normalizedRows = normalizeResults(dbType === 'mysql' ? rows[0] : rows, dbType);
+        const rows = await executeQuery(query, [], config.maxRowsPerQuery, dbType);
+        await log(`Raw query result for list-tables: ${JSON.stringify(rows)}`, 'debug');
+        const normalizedRows = normalizeResults(rows, dbType);
+        await log(`Normalized rows for list-tables: ${JSON.stringify(normalizedRows)}`, 'debug');
         const tables = Array.isArray(normalizedRows) ? normalizedRows.map(row => Object.values(row)[0]) : [];
+        await log(`Extracted tables: ${JSON.stringify(tables)}`, 'debug');
+        if (tables.length === 0) {
+          await log('No tables found in the database', 'warning');
+        }
         await log('Listed tables');
         return tables;
       } catch (error) {
@@ -223,6 +277,7 @@ const tools = [
       { name: 'table', type: 'string', description: 'Table name' },
     ],
     async execute({ table }) {
+      await ensureConnection();
       if (!connection) throw new Error('Not connected to a database');
       try {
         let query, params;
@@ -230,15 +285,15 @@ const tools = [
           query = 'DESCRIBE ??';
           params = [table];
         } else if (dbType === 'postgres') {
-          query = "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ?";
+          query = "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = $1";
           params = [table];
         } else if (dbType === 'sqlite') {
           query = `PRAGMA table_info(${sanitizeIdentifier(table)})`;
           params = [];
         }
-        const rows = await connection.raw(query, params);
+        const rows = await executeQuery(query, params, config.maxRowsPerQuery, dbType);
         await log(`Described schema for table: ${table}`);
-        return normalizeResults(dbType === 'mysql' ? rows[0] : rows, dbType);
+        return normalizeResults(rows, dbType);
       } catch (error) {
         await log(`Schema describe failed: ${error.message}`, 'error');
         throw new Error(`Schema describe failed: ${error.message}`);
@@ -254,14 +309,29 @@ const tools = [
       { name: 'data', type: 'object', description: 'Data to insert' },
     ],
     async execute({ table, data }) {
+      await ensureConnection();
       if (config.readOnly) throw new Error('Insert disabled in read-only mode');
       if (!connection) throw new Error('Not connected to a database');
       try {
         const keys = Object.keys(data);
         const values = Object.values(data);
-        
-        await connection(table).insert(data);
-
+        let query, params;
+        if (dbType === 'postgres') {
+          const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+          query = format('INSERT INTO %I (%I) VALUES (%s)', table, keys, placeholders);
+          params = values;
+        } else if (dbType === 'sqlite') {
+          const sanitizedTable = sanitizeIdentifier(table);
+          const sanitizedKeys = keys.map(sanitizeIdentifier);
+          const placeholders = keys.map(() => '?').join(', ');
+          query = `INSERT INTO ${sanitizedTable} (${sanitizedKeys.join(', ')}) VALUES (${placeholders})`;
+          params = values;
+        } else {
+          const placeholders = keys.map(() => '?').join(', ');
+          query = `INSERT INTO ?? (${keys.map(() => '??').join(', ')}) VALUES (${placeholders})`;
+          params = [table, ...keys, ...values];
+        }
+        await executeQuery(query, params, 1, dbType);
         await log(`Inserted into table: ${table}`);
         return { status: 'success', message: `Inserted into ${table}` };
       } catch (error) {
@@ -321,7 +391,110 @@ const startServer = async () => {
     }
   }
 
-  if (argv.transport === 'http') {
+  if (argv.transport === 'stdio') {
+    await log('Starting STDIO server');
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', async (data) => {
+      try {
+        const message = data.toString().trim();
+        await log(`Received stdin: ${message}`, 'debug');
+        const { jsonrpc, id, method, params } = JSON.parse(message);
+        if (jsonrpc !== '2.0') {
+          await log('Invalid JSON-RPC version', 'error');
+          return;
+        }
+        let response;
+        if (method === 'initialize') {
+          response = {
+            jsonrpc: '2.0',
+            id,
+            result: {
+              protocolVersion: '2024-11-05',
+              serverInfo: { name: 'mysql-mcp-server', version: '1.0.0' },
+              capabilities: {
+                tools: { listChanged: true },
+                resources: { listChanged: true },
+              },
+            },
+          };
+          await log('Sent initialize response', 'debug');
+        } else if (method === 'tools/list') {
+          const mapped = tools
+            .filter(t => !config.readOnly || ['read', 'metadata', 'connect'].includes(t.operationType))
+            .map(t => ({
+              name: t.name,
+              description: t.description,
+              inputSchema: {
+                type: 'object',
+                properties: Object.fromEntries((t.parameters || []).map(p => [p.name, { type: p.type, description: p.description }])),
+                required: (t.parameters || []).filter(p => p.required).map(p => p.name),
+              },
+            }));
+          response = {
+            jsonrpc: '2.0',
+            id,
+            result: { tools: mapped },
+          };
+          await log('Sent tools/list response', 'debug');
+        } else if (method === 'notifications/initialized') {
+          await log('Received notifications/initialized', 'debug');
+          return; // No response for notifications
+        } else if (method === 'tools/call') {
+          const { name, arguments: args } = params || {};
+          const selectedTool = tools.find(t => t.name === name);
+          if (!selectedTool) {
+            response = {
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32601, message: `Unknown tool: ${name}` },
+            };
+            await log(`Unknown tool via tools/call: ${name}`, 'error');
+          } else if (selectedTool.operationType !== 'read' && selectedTool.operationType !== 'metadata' && selectedTool.operationType !== 'connect' && config.readOnly) {
+            response = {
+              jsonrpc: '2.0',
+              id,
+              error: { code: -403, message: 'Operation disabled in read-only mode' },
+            };
+            await log(`Tool ${name} blocked in read-only mode`, 'error');
+          } else {
+            try {
+              const result = await selectedTool.execute(args || {});
+              response = {
+                jsonrpc: '2.0',
+                id,
+                result: { content: [{ type: 'json', json: result }] },
+              };
+              await log(`Executed tool ${name} successfully`, 'debug');
+            } catch (error) {
+              response = {
+                jsonrpc: '2.0',
+                id,
+                error: { code: -32603, message: `Execution failed: ${error.message}` },
+              };
+              await log(`tools/call error for ${name}: ${error.message}`, 'error');
+            }
+          }
+        } else {
+          await log(`Unhandled method: ${method}`, 'warning');
+          response = {
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32601, message: 'Method not found' },
+          };
+        }
+        if (response) {
+          const responseString = JSON.stringify(response) + '\n';
+          process.stdout.write(responseString);
+        }
+      } catch (error) {
+        await log(`Error processing stdin: ${error.message}`, 'error');
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32700, message: 'Parse error' } }) + '\n');
+      }
+    });
+
+    // Keep the process alive
+    process.stdin.resume();
+  } else {
     const app = express();
     app.use(express.json());
     app.post('/mcp', async (req, res) => {
@@ -354,28 +527,6 @@ const startServer = async () => {
     });
     app.listen(argv.httpPort, argv.httpHost, () => {
       log(`HTTP server running on http://${argv.httpHost}:${argv.httpPort}`);
-    });
-  } else {
-    process.stdin.on('data', async data => {
-      try {
-        const { tool, parameters } = JSON.parse(data.toString());
-        const selectedTool = tools.find(t => t.name === tool);
-        if (!selectedTool) {
-          await log(`Unknown tool: ${tool}`, 'error');
-          process.stdout.write(JSON.stringify({ error: 'Unknown tool' }) + '\n');
-          return;
-        }
-        if (selectedTool.operationType !== 'read' && selectedTool.operationType !== 'metadata' && selectedTool.operationType !== 'connect' && config.readOnly) {
-          await log(`Tool ${tool} blocked in read-only mode`, 'error');
-          process.stdout.write(JSON.stringify({ error: 'Operation disabled in read-only mode' }) + '\n');
-          return;
-        }
-        const result = await selectedTool.execute(parameters);
-        process.stdout.write(JSON.stringify({ result }) + '\n');
-      } catch (error) {
-        await log(`Error processing request: ${error.message}`, 'error');
-        process.stdout.write(JSON.stringify({ error: error.message }) + '\n');
-      }
     });
   }
   const registeredTools = tools.filter(t => !config.readOnly || ['read', 'metadata', 'connect'].includes(t.operationType));
