@@ -1,25 +1,49 @@
 {
-  "name": "mysql-mcp-extension",
-  "displayName": "MySQL MCP Extension",
-  "description": "A VS Code extension for interacting with MySQL, PostgreSQL, and SQLite via MCP",
-  "version": "0.0.1",
+  "name": "sql-mcp-extension",
+  "displayName": "SQL MCP - Database Query Assistant",
+  "description": "Enable AI assistants to query MySQL, MariaDB, PostgreSQL, and SQLite databases using Model Context Protocol",
+  "version": "1.0.0",
   "publisher": "ahmad5599",
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
+    "Data Science",
+    "Programming Languages",
     "Other"
   ],
+  "keywords": [
+    "sql",
+    "mysql",
+    "postgresql",
+    "sqlite",
+    "database",
+    "mcp",
+    "ai",
+    "copilot",
+    "llm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ahmad5599/mysql-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ahmad5599/mysql-mcp-server/issues"
+  },
+  "license": "MIT",
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:mysql-mcp.configure"
+    "*"
   ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
         "command": "mysql-mcp.configure",
-        "title": "Configure MySQL MCP Server"
+        "title": "Configure SQL MCP Connection"
+      },
+      {
+        "command": "mysql-mcp.showStatus",
+        "title": "Show SQL MCP Status"
       }
     ]
   },
@@ -33,14 +57,6 @@
   },
   "dependencies": {
     "json5": "^2.2.3",
-    "vscode-jsonrpc": "^8.2.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "mysql2": "^3.11.0",
-    "pg": "^8.16.3",
-    "pg-format": "^1.0.4",
-    "sqlite3": "^5.1.7",
-    "uuid": "^9.0.1",
-    "yargs": "^17.7.2"
+    "mysql-mcp-server": "file:../mysql-mcp-server-1.0.0.tgz"
   }
 }

@@ -1,126 +1,138 @@
 const vscode = require('vscode');
-const fs = require('fs').promises;
 const path = require('path');
-const os = require('os');
-const { spawn } = require('child_process');
-const JSON5 = require('json5');
+const { DRIVER_OPTIONS, SERVER_ID_PREFIX } = require('./src/constants');
+const { getMcpConfigPath, readJson, writeJson } = require('./src/utils');
+const { ServerManager } = require('./src/server-manager');
 
-function getMcpConfigPath() {
-  const home = os.homedir();
-  return process.platform === 'win32' ? path.join(home, 'AppData', 'Roaming', 'Code', 'User', 'mcp.json') : path.join(home, '.config', 'Code', 'User', 'mcp.json');
+function getServerEntryPath() {
+  try {
+    return require.resolve('mysql-mcp-server/server.js');
+  } catch (error) {
+    throw new Error('mysql-mcp-server dependency is missing. Run npm install inside the extension folder.');
+  }
+}
+
+function buildServerId(profileName) {
+  return `${SERVER_ID_PREFIX}/${profileName}`;
+}
+
+async function pickDriver() {
+  const selection = await vscode.window.showQuickPick(
+    DRIVER_OPTIONS.map((driver) => ({
+      label: driver.label,
+      description: driver.connectionHint,
+      value: driver.value,
+    })),
+    { placeHolder: 'Select the SQL database type you want to connect to' }
+  );
+  return selection?.value;
+}
+
+async function promptProfileName(defaultName) {
+  const name = await vscode.window.showInputBox({
+    title: 'Profile Name',
+    prompt: 'Provide a name for this database profile',
+    value: defaultName,
+    validateInput: (value) => (!value ? 'Profile name is required' : undefined),
+  });
+  return name?.trim();
+}
+
+async function promptConnectionString(driverValue) {
+  const driver = DRIVER_OPTIONS.find((item) => item.value === driverValue);
+  const connectionString = await vscode.window.showInputBox({
+    title: `Connection string for ${driver?.label ?? driverValue}`,
+    prompt: 'Enter a SQL connection string (kept locally in your mcp.json)',
+    placeHolder: driver?.connectionHint,
+    validateInput: (value) => (!value ? 'Connection string is required' : undefined),
+  });
+  return connectionString?.trim();
+}
+
+async function upsertServerConfig({ profileName, connectionString, readOnly = true }) {
+  const mcpConfigPath = getMcpConfigPath();
+  const mcpConfig = await readJson(mcpConfigPath);
+  mcpConfig.servers = mcpConfig.servers || {};
+  const serverId = buildServerId(profileName);
+  mcpConfig.servers[serverId] = {
+    type: 'stdio',
+    command: 'node',
+    args: [getServerEntryPath()],
+    env: {
+      MYSQL_MCP_CONNECTION_STRING: connectionString,
+      MYSQL_MCP_READ_ONLY: String(readOnly),
+      ...process.env,
+    },
+  };
+  await writeJson(mcpConfigPath, mcpConfig);
+  return serverId;
+}
+
+async function showStatus(outputChannel) {
+  const mcpConfigPath = getMcpConfigPath();
+  const mcpConfig = await readJson(mcpConfigPath);
+  const entries = Object.entries(mcpConfig.servers || {}).filter(([key]) => key.startsWith(SERVER_ID_PREFIX));
+  if (entries.length === 0) {
+    vscode.window.showInformationMessage('No SQL MCP connections configured yet.');
+    return;
+  }
+  outputChannel.appendLine('Configured SQL MCP connections:');
+  entries.forEach(([id, value]) => {
+    outputChannel.appendLine(`- ${id}: ${value.env?.MYSQL_MCP_CONNECTION_STRING ? '[configured]' : '[missing connection string]'}`);
+  });
+  outputChannel.show(true);
 }
 
 function activate(context) {
-  console.log('MySQL MCP Server extension activated');
-  let serverProcess = null;
-
-  const configPath = getMcpConfigPath();
-  const serverPath = path.join(context.extensionPath, 'server.js');
-
-  const readMcpConfig = async () => {
-    try {
-      const raw = await fs.readFile(configPath, 'utf8');
-      try {
-        return JSON.parse(raw);
-      } catch (_) {
-        return JSON5.parse(raw);
-      }
-    } catch (e) {
-      return {};
-    }
-  };
-
-  const writeMcpConfig = async (obj) => {
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify(obj, null, 2));
-  };
+  const output = vscode.window.createOutputChannel('SQL MCP');
+  const serverManager = new ServerManager(getServerEntryPath(), output);
 
   const configureCommand = vscode.commands.registerCommand('mysql-mcp.configure', async () => {
-    const connectionString = await vscode.window.showInputBox({
-      prompt: 'Enter SQL connection string (e.g., mysql://user:pass@localhost:3306/db, postgres://, sqlite://)',
-      password: true,
-      placeHolder: 'e.g., sqlite:///home/muhammadahmadhamid/Documents/mysql-mcp-server/test.db'
-    });
-    if (!connectionString) return;
-
-    let mcpConfig = await readMcpConfig();
-    if (!mcpConfig.servers) mcpConfig.servers = {};
-
-    mcpConfig.servers['mysql/mysql-mcp-server'] = {
-      type: 'stdio',
-      command: 'node',
-      args: [serverPath, '--readOnly'],
-      env: {
-        MYSQL_MCP_CONNECTION_STRING: connectionString,
-        ...process.env // Inherit existing environment
-      }
-    };
-
     try {
-      await writeMcpConfig(mcpConfig);
-      vscode.window.showInformationMessage('MySQL MCP Server configured');
-      // Restart the server if running
-      if (serverProcess) {
-        serverProcess.kill();
-        startServerProcess();
+      const driver = await pickDriver();
+      if (!driver) {
+        return;
       }
+      const profileName = await promptProfileName(`${driver}-profile`);
+      if (!profileName) {
+        return;
+      }
+      const connectionString = await promptConnectionString(driver);
+      if (!connectionString) {
+        return;
+      }
+
+      const serverId = await upsertServerConfig({ profileName, connectionString });
+      output.appendLine(`Updated MCP config with profile '${profileName}' (${serverId}).`);
+      vscode.window.showInformationMessage(`SQL MCP profile '${profileName}' configured.`);
     } catch (error) {
-      vscode.window.showErrorMessage(`Failed to save config: ${error.message}`);
+      vscode.window.showErrorMessage(`Failed to configure SQL MCP: ${error.message}`);
+      output.appendLine(`Error configuring SQL MCP: ${error.message}`);
     }
   });
 
-// In extension/extension.js, update the startServerProcess function
-const startServerProcess = () => {
-  if (serverProcess) serverProcess.kill();
-  readMcpConfig().then(config => {
-    const serverConfig = config.servers?.['mysql/mysql-mcp-server'];
-    if (serverConfig && serverConfig.env?.MYSQL_MCP_CONNECTION_STRING) {
-      serverProcess = spawn(serverConfig.command, serverConfig.args, {
-        env: serverConfig.env,
-        stdio: ['pipe', 'pipe', process.stderr] // Pipe stdout to parent, stderr to console
-      });
-      if (serverProcess) {
-        serverProcess.stdout.on('data', (data) => {
-          console.log(`Server stdout: ${data}`);
-          process.stdout.write(data);
-        });
-        serverProcess.stderr.on('data', (data) => console.error(`Server stderr: ${data}`));
-        serverProcess.on('error', (error) => console.error(`Server error: ${error.message}`));
-        serverProcess.on('exit', (code) => console.log(`Server exited with code ${code}`));
-      } else {
-        console.error('Failed to spawn server process');
-      }
-    } else {
-      console.error('Server config or connection string missing');
+  const statusCommand = vscode.commands.registerCommand('mysql-mcp.showStatus', () => showStatus(output));
+
+  context.subscriptions.push(configureCommand, statusCommand, output);
+
+  // Attempt to start a default profile automatically if present
+  (async () => {
+    const mcpConfigPath = getMcpConfigPath();
+    const mcpConfig = await readJson(mcpConfigPath);
+    const defaultEntry = Object.entries(mcpConfig.servers || {}).find(([key]) => key.startsWith(SERVER_ID_PREFIX));
+    if (defaultEntry) {
+      const [, value] = defaultEntry;
+      serverManager.start(value.env || {});
     }
-  }).catch(error => {
-    console.error(`Error reading MCP config: ${error.message}`);
+  })().catch((error) => {
+    output.appendLine(`Failed to auto-start SQL MCP server: ${error.message}`);
   });
-};
 
-  // Start server on activation
-  startServerProcess();
-
-  context.subscriptions.push(configureCommand);
-
-  readMcpConfig().then(async (config) => {
-    const hasModern = !!(config.servers && config.servers['mysql/mysql-mcp-server']);
-    if (!hasModern) {
-      vscode.window.showInformationMessage(
-        'MySQL MCP Server requires a connection string. Configure now?',
-        'Configure'
-      ).then(selection => {
-        if (selection === 'Configure') {
-          vscode.commands.executeCommand('mysql-mcp.configure');
-        }
-      });
-    }
+  context.subscriptions.push({
+    dispose: () => serverManager.stop(),
   });
 }
 
-function deactivate() {
-  if (serverProcess) serverProcess.kill();
-  console.log('MySQL MCP Server extension deactivated');
-}
+function deactivate() {}
 
 module.exports = { activate, deactivate };

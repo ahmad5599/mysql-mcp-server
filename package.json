@@ -8,20 +8,37 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Add tests here\" && exit 0"
+    "test": "node scripts/integration-sqlite.js"
   },
   "keywords": [
     "mcp",
+    "model-context-protocol",
     "mysql",
+    "mariadb",
     "postgres",
+    "postgresql",
     "sqlite",
     "sql",
     "database",
-    "ai"
+    "ai",
+    "llm",
+    "copilot",
+    "vscode"
   ],
-  "author": "Your Name",
+  "files": [
+    "server.js",
+    "src",
+    "scripts",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "Dockerfile",
+    "test.db"
+  ],
+  "author": "Ahmad <ahmad5599@github.com>",
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "knex": "^3.1.0",
@@ -34,6 +51,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/mysql-mcp-server"
+    "url": "https://github.com/ahmad5599/mysql-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ahmad5599/mysql-mcp-server/issues"
+  },
+  "homepage": "https://github.com/ahmad5599/mysql-mcp-server#readme",
+  "engines": {
+    "node": ">=20.19.0"
   }
 }
