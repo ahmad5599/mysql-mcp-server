@@ -44,24 +44,35 @@ A production-ready Model Context Protocol (MCP) server with VS Code extension th
 
 ### Server Installation
 
+**Option 1: Install from npm (Recommended)**
 \`\`\`bash
-# Clone the repository
+npm install -g @ahmad3244/sql-mcp-server
+# Or use without installing
+npx @ahmad3244/sql-mcp-server
+\`\`\`
+
+**Option 2: Install from GitHub Release**
+\`\`\`bash
+npm install https://github.com/ahmad5599/mysql-mcp-server/releases/download/v1.0.0/mysql-mcp-server-1.0.0.tgz
+\`\`\`
+
+**Option 3: Clone and build from source**
+\`\`\`bash
 git clone https://github.com/ahmad5599/mysql-mcp-server.git
 cd mysql-mcp-server
-
-# Install dependencies
 npm install
-
-# Run tests to verify installation
 npm test
 \`\`\`
 
 ### VS Code Extension Installation
 
-**Option 1: Pre-built VSIX (Recommended)**
+**Option 1: Download from GitHub Release (Recommended)**
 \`\`\`bash
-# Install the pre-packaged extension
-code --install-extension extension/mysql-mcp-extension.vsix
+# Download the VSIX
+wget https://github.com/ahmad5599/mysql-mcp-server/releases/download/v1.0.0/sql-mcp-extension-1.0.0.vsix
+
+# Install the extension
+code --install-extension sql-mcp-extension-1.0.0.vsix
 \`\`\`
 
 **Option 2: Build from source**
@@ -77,22 +88,34 @@ code --install-extension mysql-mcp-extension.vsix
 ### 1. Using SQLite (No Setup Required)
 
 \`\`\`bash
-# Start with the included test database
+# If installed globally
+MYSQL_MCP_CONNECTION_STRING="sqlite:///path/to/database.db" mysql-mcp-server
+
+# Using npx
+MYSQL_MCP_CONNECTION_STRING="sqlite:///path/to/database.db" npx @ahmad3244/sql-mcp-server
+
+# From source
 MYSQL_MCP_CONNECTION_STRING="sqlite://\$(pwd)/test.db" node server.js
 \`\`\`
 
 ### 2. Using MySQL/MariaDB
 
 \`\`\`bash
-# Connect to MySQL database
-MYSQL_MCP_CONNECTION_STRING="mysql://user:password@localhost:3306/database" node server.js
+MYSQL_MCP_CONNECTION_STRING="mysql://user:password@localhost:3306/database" npx @ahmad3244/sql-mcp-server
 \`\`\`
 
 ### 3. Using PostgreSQL
 
 \`\`\`bash
-# Connect to PostgreSQL database
-MYSQL_MCP_CONNECTION_STRING="postgres://user:password@localhost:5432/database" node server.js
+MYSQL_MCP_CONNECTION_STRING="postgres://user:password@localhost:5432/database" npx @ahmad3244/sql-mcp-server
+\`\`\`
+
+### 4. Using Docker
+
+\`\`\`bash
+docker run --rm \\
+  -e MYSQL_MCP_CONNECTION_STRING="mysql://user:pass@host.docker.internal:3306/db" \\
+  ahmad5599/sql-mcp-server:latest
 \`\`\`
 
 ## VS Code Extension
