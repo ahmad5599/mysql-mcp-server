@@ -1,5 +1,5 @@
 {
-  "name": "mysql-mcp-server",
+  "name": "@ahmad3244/sql-mcp-server",
   "version": "1.0.0",
   "description": "MCP server for SQL databases (MySQL, PostgreSQL, SQLite)",
   "main": "server.js",
